@@ -3,16 +3,13 @@
 
 import cv2
 import numpy as np
-import matplotlib.pyplot as plt
 import math
-from math import cos, sin
 
 # Keys
 ESC_KEY = 27
 
-# Point = np.array.shape [2,]
+# A point should be an np.array with shape [2,]
 
-# Line class (p1, p2 should be np.matrix objects)		
 class Line(object):
 	
 	def __init__(self, p1, p2):	
@@ -37,13 +34,7 @@ class Line(object):
 			return None, False, False
 		
 	def in_range(self, p):
-		return(((self.points[0,:] <= p)==(p <= self.points[1,:])).all())
-			
-# Function to plot line consitent of two dimensional array
-def plot_line(M):
-	for i in range((M.shape[0] - 1)):
-		plt.plot([M[i, 0], M[i + 1, 0]],[M[i, 1], M[i + 1, 1]],'k-')
-	plt.show()		
+		return(((self.points[0,:] <= p)==(p <= self.points[1,:])).all())		
 	
 class Spline(object):
 	
@@ -62,11 +53,6 @@ class Spline(object):
 			P = self.rel_line(S, E, ratio)
 			self.points[i,:] = P		
 
-# Function to merge line segments
-def merge_lines(line_list):
-	line = np.concatenate(line_list)
-	return(line)
-		
 # Course class
 class Course(object):
 	
@@ -86,7 +72,7 @@ class Course(object):
 			   sp2.points,
 			   sect3.points,
 			   sp3.points]
-		self.points = merge_lines(line_list)
+		self.points = np.concatenate(line_list)
 	
 	def draw(self, frame):
 		for i in range(self.points.shape[0] - 1):		
@@ -96,8 +82,8 @@ class Course(object):
 		return frame
 
 def rotation(rad):
-	return(np.matrix([[cos(rad), -sin(rad)],
-					[sin(rad), cos(rad)]]))	
+	return(np.matrix([[math.cos(rad), -math.sin(rad)],
+					  [math.sin(rad),  math.cos(rad)]]))	
 
 # Car class
 class Car(object):
@@ -108,8 +94,7 @@ class Car(object):
 		
 	def move(self, x, rad):
 		self.pos = self.pos + x * self.dir * 0.5
-		R = np.matrix([[cos(rad), -sin(rad)],[sin(rad), cos(rad)]]) # Use rotation method
-		self.dir = np.matmul(R, self.dir)
+		self.dir = np.matmul(rotation(rad), self.dir)
 		self.pos = self.pos + x * self.dir * 0.5
 	
 	def draw(self, frame):
@@ -130,15 +115,14 @@ class Car(object):
 		detect_line = Line(sp, ep)
 		
 		# Draw detection line
-		s_pix = to_pixel(np.squeeze(np.array(sp)))
-		e_pix = to_pixel(np.squeeze(np.array(ep)))
+		s_pix = to_pixel(sp)
+		e_pix = to_pixel(ep)
 		cv2.line(frame, tuple(s_pix.astype(int)), tuple(e_pix.astype(int)),(0,255,0),2)	
 				
 		# Loop through course
 		for i in range(points.shape[0] - 1):
 			sub_line = Line(points[i,:], points[i+1,:])
-			I = detect_line.intersect(sub_line)			
-			inters, does_intersect, overlap = I
+			inters, has_intersect, overlap = detect_line.intersect(sub_line)			
 			if overlap == True: 	
 				return(np.linalg.norm(inters - sp) / np.linalg.norm(ep - sp))
 	
