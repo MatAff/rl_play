@@ -25,10 +25,20 @@ class Line(object):
 	def intersect(self, other):				
 		CA = self.points[-2,:] - other.points[0,:]
 		AB = self.points[-1,:] - self.points[-2,:]
-		CD = other.points[1,:] - other.points[0,:]
-		s = np.cross(CA,AB) / np.cross(CD, AB)
-		return(other.points[0,:] + s * CD)
+		CD = other.points[1,:] - other.points[0,:]		
+		nom = np.cross(CA,AB) 
+		denom = np.cross(CD, AB) ### Just check length AB and CD?
+		if denom != 0:
+			s = nom / denom
+			i  = other.points[0,:] + s * CD
+			overlap = self.in_range(i) and other.in_range(i)
+			return(i, True, overlap)
+		else:
+			return None, False, False
 		
+	def in_range(self, p):
+		return(((self.points[0,:] <= p)==(p <= self.points[1,:])).all())
+			
 # Function to plot line consitent of two dimensional array
 def plot_line(M):
 	for i in range((M.shape[0] - 1)):
@@ -44,7 +54,7 @@ class Spline(object):
 		self.points = np.zeros((n,2))			
 		B = l1.get_point(-1)
 		C = l2.get_point(0)
-		I = l1.intersect(l2)				
+		I, _, _ = l1.intersect(l2)				
 		for i in range(n):
 			ratio = i / (n-1)
 			S = self.rel_line(B, I, ratio)
@@ -66,7 +76,7 @@ class Course(object):
 		sect2 = Line(np.array([5,5]), np.array([4,6]))
 		sect3 = Line(np.array([-4,6]), np.array([-5,5]))
 
-		sp1 = Spline(sect1, sect2, 25)
+		sp1 = Spline(sect1, sect2, 25) ### Make lean
 		sp2 = Spline(sect2, sect3, 25)
 		sp3 = Spline(sect3, sect1, 25)
 
@@ -85,6 +95,10 @@ class Course(object):
 			cv2.line(frame, tuple(s_pix.astype(int)), tuple(e_pix.astype(int)),(255,0,0),2)		
 		return frame
 
+def rotation(rad):
+	return(np.matrix([[cos(rad), -sin(rad)],
+					[sin(rad), cos(rad)]]))	
+
 # Car class
 class Car(object):
 	
@@ -94,21 +108,42 @@ class Car(object):
 		
 	def move(self, x, rad):
 		self.pos = self.pos + x * self.dir * 0.5
-		R = np.matrix([[cos(rad), -sin(rad)],
-				      [sin(rad), cos(rad)]])
+		R = np.matrix([[cos(rad), -sin(rad)],[sin(rad), cos(rad)]]) # Use rotation method
 		self.dir = np.matmul(R, self.dir)
 		self.pos = self.pos + x * self.dir * 0.5
 	
 	def draw(self, frame):
 		sp = np.squeeze(np.array(self.pos))		
-		ep = np.squeeze(np.array(self.pos + self.dir))		
+		ep = np.squeeze(np.array(self.pos - self.dir))		
 		s_pix = to_pixel(sp)
 		e_pix = to_pixel(ep)	
 		cv2.line(frame, tuple(s_pix.astype(int)), tuple(e_pix.astype(int)),(0,0,255),2)		
 		return frame
 	
+	def detect(self, points, frame):
+		
+		# Create detection line
+		sp = self.pos + np.matmul(rotation(math.pi * -0.25), self.dir)
+		ep = self.pos + np.matmul(rotation(math.pi *  0.25), self.dir)
+		sp = np.squeeze(np.array(sp)) ### Fix the need to this transformation
+		ep = np.squeeze(np.array(ep)) 
+		detect_line = Line(sp, ep)
+		
+		# Draw detection line
+		s_pix = to_pixel(np.squeeze(np.array(sp)))
+		e_pix = to_pixel(np.squeeze(np.array(ep)))
+		cv2.line(frame, tuple(s_pix.astype(int)), tuple(e_pix.astype(int)),(0,255,0),2)	
+				
+		# Loop through course
+		for i in range(points.shape[0] - 1):
+			sub_line = Line(points[i,:], points[i+1,:])
+			I = detect_line.intersect(sub_line)			
+			inters, does_intersect, overlap = I
+			if overlap == True: 	
+				return(np.linalg.norm(inters - sp) / np.linalg.norm(ep - sp))
+	
 # Function to convert cartesian coordinate into pixel coordinates
-def to_pixel(cart):	
+def to_pixel(cart):	 ### Move to class
 	S = np.array([scale, -scale])
 	T = np.array([320, 480 - 40])
 	return(cart * S + T)
@@ -124,7 +159,7 @@ cv2.namedWindow(frame_name)
 # Frame settings
 height = 480
 width = 640
-scale = 20
+scale = 35
 
 # Break variable
 running = True
@@ -136,6 +171,9 @@ while running:
 	frame = np.zeros((height, width,3), np.uint8)	
 	course.draw(frame)
 	car.draw(frame)
+	
+	# Detect 
+	line_pos = car.detect(course.points, frame)
 
 	# Show and get key
 	cv2.imshow(frame_name, frame)
@@ -144,13 +182,13 @@ while running:
 	# Process key
 	if key == ESC_KEY:
 		running = False
-
-	# Detect 
 	
 	# Decide
+	rotate = (line_pos - 0.5) * 0.2
+	print(rotate)
 	
 	# Action 
-	car.move(0.1, math.pi * 0.05)
+	car.move(0.15, rotate)
 		
 cv2.destroyWindow(frame_name)			
 	
