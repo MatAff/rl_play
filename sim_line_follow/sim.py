@@ -99,9 +99,12 @@ class Car(object):
 		self.pos = self.pos + x * self.dir * 0.5
 	
 	def draw(self, frame):
-		sp = np.squeeze(np.array(self.pos))		
-		ep = np.squeeze(np.array(self.pos - self.dir))	
-		draw_line(frame, Line(sp, ep).points, (0,0,255))		
+		tl = self.pos + np.matmul(rotation(math.pi *  0.5), self.dir * 0.3)
+		tr = self.pos + np.matmul(rotation(math.pi * -0.5), self.dir * 0.3)
+		bl = self.pos - self.dir + np.matmul(rotation(math.pi *  0.5), self.dir * 0.3)
+		br = self.pos - self.dir + np.matmul(rotation(math.pi * -0.5), self.dir * 0.3)		
+		points = np.array(np.concatenate([tl, tr, br, bl, tl, br, bl, tr], axis=1).transpose())				
+		draw_line(frame, points, (0,0,255))		
 	
 	def detect(self, points, frame):
 		
@@ -113,7 +116,7 @@ class Car(object):
 		detect_line = Line(sp, ep)
 		
 		# Draw detection line
-		draw_line(frame, detect_line.points, (0,255,0))
+		draw_line(frame, detect_line.points, (0,200,0))
 				
 		# Loop through course
 		for i in range(points.shape[0] - 1):
@@ -166,8 +169,9 @@ while running:
 		# Action 
 		car.move(0.2, rotate)
 		
-	except:
+	except Exception as e: 
 		
+		print(e)		
 		running = False
 		
 cv2.destroyWindow(frame_name)			
