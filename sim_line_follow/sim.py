@@ -3,7 +3,9 @@
 
 import cv2
 import numpy as np
+import pandas as pd
 import math
+import matplotlib.pyplot as plt
 
 # Keys
 ESC_KEY = 27
@@ -104,13 +106,13 @@ class Car(object):
 		bl = self.pos - self.dir + np.matmul(rotation(math.pi *  0.5), self.dir * 0.3)
 		br = self.pos - self.dir + np.matmul(rotation(math.pi * -0.5), self.dir * 0.3)		
 		points = np.array(np.concatenate([tl, tr, br, bl, tl, br, bl, tr], axis=1).transpose())				
-		draw_line(frame, points, (0,0,255))		
+		draw_line(frame, points, (0,0,255))			
 	
-	def detect(self, points, frame):
+	def detect(self, points, frame, dist):
 		
 		# Create detection line
-		sp = self.pos + np.matmul(rotation(math.pi * -0.25), self.dir)
-		ep = self.pos + np.matmul(rotation(math.pi *  0.25), self.dir)
+		sp = self.pos + np.matmul(rotation(math.pi * -0.25), self.dir * dist)
+		ep = self.pos + np.matmul(rotation(math.pi *  0.25), self.dir * dist)
 		sp = np.squeeze(np.array(sp)) 
 		ep = np.squeeze(np.array(ep)) 
 		detect_line = Line(sp, ep)
@@ -124,10 +126,14 @@ class Car(object):
 			inters, has_intersect, overlap = detect_line.intersect(sub_line)			
 			if overlap == True: 	
 				return(np.linalg.norm(inters - sp) / np.linalg.norm(ep - sp))
-
+	
+	def detect_list(self, points, frame, dist_list):
+		return([self.detect(points, frame, dist) for dist in dist_list])
+	
 # Instantiate course and car		
 course = Course()
 car = Car()
+dist_list = [0.5, 1.0, 1.5, 2.0, 2.5]
 
 # Create window
 frame_name = 'Sim'
@@ -140,6 +146,100 @@ scale = 35
 
 # Break variable
 running = True
+counter = 0
+
+# Store measurement and action
+action_state = np.empty((0,len(dist_list) + 1))
+
+# Main loop
+while running:
+	
+	try:
+	
+		# Create frame and draw elements
+		frame = np.zeros((height, width,3), np.uint8)	
+		course.draw(frame)
+		car.draw(frame)
+		
+		# Detect 		
+		line_pos = car.detect_list(course.points, frame, dist_list)
+		
+		# Show and get key
+		cv2.imshow(frame_name, frame)
+		key = cv2.waitKey(20)
+	
+		# Process key
+		if key == ESC_KEY:
+			running = False
+			
+		# Counter
+		counter += 1
+		if counter > 1000:
+			running = False
+		
+		# Decide
+		if line_pos[1] is not None: 
+			rotate = (line_pos[1] - 0.5) * 0.2
+			
+		# Store 
+		store_arr = np.concatenate(([rotate],line_pos))
+		action_state = np.append(action_state, np.array([store_arr]), 0)
+	
+		# Action 
+		car.move(0.2, rotate)
+		
+	except Exception as e: 
+		
+		print(e)		
+		running = False
+		
+cv2.destroyWindow(frame_name)			
+
+### MACHINE LEARNING SECTION ###
+
+import keras
+
+def preprocess(X):
+	X = X.astype('float')
+	X = X - 0.5
+	X = np.nan_to_num(X)
+	return(X)
+
+def create_model(shape):
+	model = keras.Sequential()
+	model.add(keras.layers.Dense(25, activation='relu', input_shape=(shape[1],)))
+	model.add(keras.layers.Dense(25, activation='relu'))
+	model.add(keras.layers.Dense(25, activation='relu'))
+	model.add(keras.layers.Dense(1))
+	model.compile(optimizer='rmsprop', loss='mse') # For regression
+	print(model.summary())
+	return(model)
+
+print(action_state.shape)
+X = action_state[:,1:]
+y = action_state[:,0]
+
+# Preprocess data
+X = preprocess(X)
+
+# Create model
+model = create_model(X.shape)
+
+# Fit model
+model.fit(X, y, epochs=500, batch_size=256, verbose=0)
+
+x = preprocess(np.array([line_pos]))
+model.predict(x)
+
+# Recreate frame
+cv2.namedWindow(frame_name)		
+
+# Reset car
+car = Car()
+
+# Break variable
+running = True
+counter = 0
 
 # Main loop
 while running:
@@ -152,8 +252,8 @@ while running:
 		car.draw(frame)
 		
 		# Detect 
-		line_pos = car.detect(course.points, frame)
-	
+		line_pos = car.detect_list(course.points, frame, dist_list)
+		
 		# Show and get key
 		cv2.imshow(frame_name, frame)
 		key = cv2.waitKey(20)
@@ -161,11 +261,20 @@ while running:
 		# Process key
 		if key == ESC_KEY:
 			running = False
+			
+		# Counter
+		counter += 1
+		if counter > 1000:
+			running = False
 		
 		# Decide
-		if line_pos is not None: 
-			rotate = (line_pos - 0.5) * 0.2
-		
+		x = preprocess(np.array([line_pos]))
+		rotate = model.predict(x)[0,0]	
+
+		# Store 
+		store_arr = np.concatenate(([rotate],line_pos))
+		action_state = np.append(action_state, np.array([store_arr]), 0)	
+
 		# Action 
 		car.move(0.2, rotate)
 		
@@ -174,6 +283,98 @@ while running:
 		print(e)		
 		running = False
 		
-cv2.destroyWindow(frame_name)			
-	
+cv2.destroyWindow(frame_name)		
 
+print(action_state.shape)
+
+def assign_reward(action_state, discount):
+	position = action_state[:,1]
+	position = position.astype('float')
+	position = position - 0.5	
+	position[np.isnan(position)] = 2.0
+	position = np.absolute(position)
+	position[0:100]
+	running_reward = 0.0
+	rewards = np.array([], 'float')
+	for i in reversed(range(position.shape[0])):
+		rewards = np.concatenate(([running_reward], rewards))
+		running_reward = running_reward * discount + position[i] * (1 - discount)
+	return(rewards)
+
+for j in range(1000):
+
+	rewards = assign_reward(action_state, 0.99)
+	
+	plt.plot(rewards)
+	
+	# Select trainig cases
+	med = np.median(rewards)
+	#med = 2.0 # Override
+	sub_action_state = action_state[rewards < med,:]
+	print(sub_action_state.shape)
+	
+	X = sub_action_state[:,1:]
+	y = sub_action_state[:,0]
+	
+	# Preprocess data
+	X = preprocess(X)
+	
+	# Create model
+	model = create_model(X.shape)
+	
+	# Fit model
+	model.fit(X, y, epochs=500, batch_size=256, verbose=0)
+	
+	# Recreate frame
+	cv2.namedWindow(frame_name)		
+	
+	# Reset car
+	car = Car()
+
+	# Break variable
+	running = True
+	counter = 0
+	
+	# Main loop
+	while running:
+		
+		try:
+		
+			# Create frame and draw elements
+			frame = np.zeros((height, width,3), np.uint8)	
+			course.draw(frame)
+			car.draw(frame)
+			
+			# Detect 
+			line_pos = car.detect_list(course.points, frame, dist_list)
+			
+			# Show and get key
+			cv2.imshow(frame_name, frame)
+			key = cv2.waitKey(20)
+		
+			# Process key
+			if key == ESC_KEY:
+				running = False
+			
+			# Counter
+			counter += 1
+			if counter > 1000:
+				running = False
+			
+			# Decide
+			x = preprocess(np.array([line_pos]))
+			rotate = model.predict(x)[0,0]	
+	
+			# Store 
+			store_arr = np.concatenate(([rotate],line_pos))
+			action_state = np.append(action_state, np.array([store_arr]), 0)	
+	
+			# Action 
+			car.move(0.2, rotate)
+			
+		except Exception as e: 
+			
+			print(e)		
+			running = False
+			
+	cv2.destroyWindow(frame_name)		
