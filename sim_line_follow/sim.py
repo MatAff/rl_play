@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import math
 import matplotlib.pyplot as plt
+import random
 
 # Keys
 ESC_KEY = 27
@@ -301,22 +302,48 @@ def assign_reward(action_state, discount):
 		running_reward = running_reward * discount + position[i] * (1 - discount)
 	return(rewards)
 
+def select_data(action_state, rewards):
+
+	# Preprocess data
+	X = action_state[:,1:]	
+	X = preprocess(X)
+	y = rewards
+	
+	print(X.shape)
+	print(y.shape)
+	
+	# Create and fit model
+	model = create_model(X.shape)
+	model.fit(X, y, epochs=50, batch_size=256, verbose=0) # Less training to avoid overfitting
+
+    # Predict expected rewards
+	expected_rewards = model.predict(X)
+	plt.scatter(rewards, expected_rewards)
+		
+	# Select better than expected performing data
+	sub_action_state = action_state[rewards < expected_rewards[:,0],:]
+	print(sub_action_state.shape)
+	
+	return(sub_action_state)
+	
 for j in range(1000):
 
 	rewards = assign_reward(action_state, 0.99)
 	
 	plt.plot(rewards)
 	
-	# Select trainig cases
-	med = np.median(rewards)
-	#med = 2.0 # Override
-	sub_action_state = action_state[rewards < med,:]
-	print(sub_action_state.shape)
+	# Select data
+	sub_action_state = select_data(action_state, rewards)
 	
+	# Select trainig cases
+	#	med = np.median(rewards)
+	#	#med = 2.0 # Override
+	#	sub_action_state = action_state[rewards < med,:]
+	#	print(sub_action_state.shape)
+
+	# Preprocess data	
 	X = sub_action_state[:,1:]
 	y = sub_action_state[:,0]
-	
-	# Preprocess data
 	X = preprocess(X)
 	
 	# Create model
@@ -334,6 +361,10 @@ for j in range(1000):
 	# Break variable
 	running = True
 	counter = 0
+	
+	# Randomness
+	err = (random.random() - 0.5) /10
+	err_discount = 0.9
 	
 	# Main loop
 	while running:
@@ -364,6 +395,12 @@ for j in range(1000):
 			# Decide
 			x = preprocess(np.array([line_pos]))
 			rotate = model.predict(x)[0,0]	
+			
+			# Add error
+			err = err * err_discount + (1- err_discount) * ((random.random() - 0.5) / 10)
+			print(err)
+			print(rotate)
+			rotate += err
 	
 			# Store 
 			store_arr = np.concatenate(([rotate],line_pos))
