@@ -7,11 +7,12 @@ import pandas as pd
 import math
 import matplotlib.pyplot as plt
 import random
+import keras
 
 # Keys
 ESC_KEY = 27
 
-# A point should be an np.array with shape [2,]
+# A point should be an np.array with shape (2,)
 
 class Line(object):
 	
@@ -130,6 +131,57 @@ class Car(object):
 	
 	def detect_list(self, points, frame, dist_list):
 		return([self.detect(points, frame, dist) for dist in dist_list])
+
+def create_model(shape):
+	model = keras.Sequential()
+	model.add(keras.layers.Dense(10, activation='relu', input_shape=(shape[1],)))
+	model.add(keras.layers.Dense(10, activation='relu'))
+	model.add(keras.layers.Dense(1))
+	model.compile(optimizer='rmsprop', loss='mse')
+	print(model.summary())
+	return(model)
+
+def preprocess(X):
+	X = X.astype('float') - 0.5
+	X = np.nan_to_num(X)
+	return(X)
+
+def assign_reward(action_state, discount):
+	
+	# Process position
+	position = action_state[:,1]
+	position = position.astype('float') - 0.5
+	position[np.isnan(position)] = 2.0
+	position = np.absolute(position)
+	
+	# Calculate reward
+	running_reward = 0.0
+	rewards = np.array([], 'float')
+	for i in reversed(range(position.shape[0])):
+		rewards = np.concatenate(([running_reward], rewards))
+		running_reward = running_reward * discount + position[i] * (1 - discount)
+	
+	return(rewards)
+
+def select_data(action_state, rewards):
+
+	# Preprocess data
+	X = action_state[:,1:]	
+	X = preprocess(X)
+	y = rewards
+	
+	# Create and fit model
+	model = create_model(X.shape)
+	model.fit(X, y, epochs=50, batch_size=256, verbose=0) 
+
+    # Predict expected rewards
+	expected_rewards = model.predict(X)
+	plt.scatter(rewards, expected_rewards)
+		
+	# Select better than expected performing data
+	sub_action_state = action_state[rewards < expected_rewards[:,0],:]
+	
+	return(sub_action_state)
 	
 # Instantiate course and car		
 course = Course()
@@ -145,267 +197,85 @@ height = 480
 width = 640
 scale = 35
 
-# Break variable
-running = True
-counter = 0
-
 # Store measurement and action
 action_state = np.empty((0,len(dist_list) + 1))
 
-# Main loop
-while running:
-	
-	try:
-	
-		# Create frame and draw elements
-		frame = np.zeros((height, width,3), np.uint8)	
-		course.draw(frame)
-		car.draw(frame)
-		
-		# Detect 		
-		line_pos = car.detect_list(course.points, frame, dist_list)
-		
-		# Show and get key
-		cv2.imshow(frame_name, frame)
-		key = cv2.waitKey(20)
-	
-		# Process key
-		if key == ESC_KEY:
-			running = False
-			
-		# Counter
-		counter += 1
-		if counter > 1000:
-			running = False
-		
-		# Decide
-		if line_pos[1] is not None: 
-			rotate = (line_pos[1] - 0.5) * 0.2
-			
-		# Store 
-		store_arr = np.concatenate(([rotate],line_pos))
-		action_state = np.append(action_state, np.array([store_arr]), 0)
-	
-		# Action 
-		car.move(0.2, rotate)
-		
-	except Exception as e: 
-		
-		print(e)		
-		running = False
-		
-cv2.destroyWindow(frame_name)			
-
-### MACHINE LEARNING SECTION ###
-
-import keras
-
-def preprocess(X):
-	X = X.astype('float')
-	X = X - 0.5
-	X = np.nan_to_num(X)
-	return(X)
-
-def create_model(shape):
-	model = keras.Sequential()
-	model.add(keras.layers.Dense(25, activation='relu', input_shape=(shape[1],)))
-	model.add(keras.layers.Dense(25, activation='relu'))
-	model.add(keras.layers.Dense(25, activation='relu'))
-	model.add(keras.layers.Dense(1))
-	model.compile(optimizer='rmsprop', loss='mse') # For regression
-	print(model.summary())
-	return(model)
-
-print(action_state.shape)
-X = action_state[:,1:]
-y = action_state[:,0]
-
-# Preprocess data
-X = preprocess(X)
-
-# Create model
-model = create_model(X.shape)
-
-# Fit model
-model.fit(X, y, epochs=500, batch_size=256, verbose=0)
-
-x = preprocess(np.array([line_pos]))
-model.predict(x)
-
-# Recreate frame
-cv2.namedWindow(frame_name)		
-
-# Reset car
-car = Car()
-
-# Break variable
+# Set number runs
+nr_runs = 100
+frames_per_run = 1000
 running = True
-counter = 0
 
-# Main loop
-while running:
+# Randomness
+err = (random.random() - 0.5) /10
+err_discount = 0.9
+
+# Loop through runs
+for run in range(nr_runs):
 	
-	try:
-	
-		# Create frame and draw elements
-		frame = np.zeros((height, width,3), np.uint8)	
-		course.draw(frame)
-		car.draw(frame)
+	# Reset
+	print(run)
+	car = Car()	
+
+	# Create model after first run
+	if run > 0:
 		
-		# Detect 
-		line_pos = car.detect_list(course.points, frame, dist_list)
-		
-		# Show and get key
-		cv2.imshow(frame_name, frame)
-		key = cv2.waitKey(20)
-	
-		# Process key
-		if key == ESC_KEY:
-			running = False
+		if run == 1:
+			X = action_state[:,1:]
+			y = action_state[:,0]
 			
-		# Counter
-		counter += 1
-		if counter > 1000:
-			running = False
+			# Create model
+			model = create_model(X.shape)
+				
+		else:			
+			# Select data		
+			rewards = assign_reward(action_state, 0.9)
+			sub_action_state = select_data(action_state, rewards)
+
+			# Preprocess data	
+			X = sub_action_state[:,1:]
+			y = sub_action_state[:,0]					
 		
-		# Decide
-		x = preprocess(np.array([line_pos]))
-		rotate = model.predict(x)[0,0]	
-
-		# Store 
-		store_arr = np.concatenate(([rotate],line_pos))
-		action_state = np.append(action_state, np.array([store_arr]), 0)	
-
-		# Action 
-		car.move(0.2, rotate)
+		# Preprocess data
+		X = preprocess(X)
 		
-	except Exception as e: 
+		# Fit model
+		model.fit(X, y, epochs=50, batch_size=256, verbose=0)
 		
-		print(e)		
-		running = False
-		
-cv2.destroyWindow(frame_name)		
-
-print(action_state.shape)
-
-def assign_reward(action_state, discount):
-	position = action_state[:,1]
-	position = position.astype('float')
-	position = position - 0.5	
-	position[np.isnan(position)] = 2.0
-	position = np.absolute(position)
-	position[0:100]
-	running_reward = 0.0
-	rewards = np.array([], 'float')
-	for i in reversed(range(position.shape[0])):
-		rewards = np.concatenate(([running_reward], rewards))
-		running_reward = running_reward * discount + position[i] * (1 - discount)
-	return(rewards)
-
-def select_data(action_state, rewards):
-
-	# Preprocess data
-	X = action_state[:,1:]	
-	X = preprocess(X)
-	y = rewards
-	
-	print(X.shape)
-	print(y.shape)
-	
-	# Create and fit model
-	model = create_model(X.shape)
-	model.fit(X, y, epochs=50, batch_size=256, verbose=0) # Less training to avoid overfitting
-
-    # Predict expected rewards
-	expected_rewards = model.predict(X)
-	plt.scatter(rewards, expected_rewards)
-		
-	# Select better than expected performing data
-	sub_action_state = action_state[rewards < expected_rewards[:,0],:]
-	print(sub_action_state.shape)
-	
-	return(sub_action_state)
-	
-for j in range(1000):
-
-	rewards = assign_reward(action_state, 0.99)
-	
-	plt.plot(rewards)
-	
-	# Select data
-	sub_action_state = select_data(action_state, rewards)
-	
-	# Select trainig cases
-	#	med = np.median(rewards)
-	#	#med = 2.0 # Override
-	#	sub_action_state = action_state[rewards < med,:]
-	#	print(sub_action_state.shape)
-
-	# Preprocess data	
-	X = sub_action_state[:,1:]
-	y = sub_action_state[:,0]
-	X = preprocess(X)
-	
-	# Create model
-	model = create_model(X.shape)
-	
-	# Fit model
-	model.fit(X, y, epochs=500, batch_size=256, verbose=0)
-	
-	# Recreate frame
-	cv2.namedWindow(frame_name)		
-	
-	# Reset car
-	car = Car()
-
-	# Break variable
-	running = True
-	counter = 0
-	
-	# Randomness
-	err = (random.random() - 0.5) /10
-	err_discount = 0.9
-	
 	# Main loop
-	while running:
+	for frame_nr in range(frames_per_run):
 		
 		try:
 		
-			# Create frame and draw elements
+			# Simulation
 			frame = np.zeros((height, width,3), np.uint8)	
 			course.draw(frame)
 			car.draw(frame)
-			
-			# Detect 
 			line_pos = car.detect_list(course.points, frame, dist_list)
 			
 			# Show and get key
-			cv2.imshow(frame_name, frame)
-			key = cv2.waitKey(20)
+			if run > 50 : 
+				cv2.imshow(frame_name, frame)
+				key = cv2.waitKey(5)
 		
 			# Process key
-			if key == ESC_KEY:
+			if key == ESC_KEY :	
 				running = False
-			
-			# Counter
-			counter += 1
-			if counter > 1000:
-				running = False
-			
+				break
+				
 			# Decide
-			x = preprocess(np.array([line_pos]))
-			rotate = model.predict(x)[0,0]	
+			if run == 0:
+				if line_pos[1] is not None: 
+					rotate = (line_pos[1] - 0.5) * 0.2
+			else:			
+				x = preprocess(np.array([line_pos]))
+				rotate = model.predict(x)[0,0]				
+				err = err * err_discount + (1- err_discount) * ((random.random() - 0.5) / 10)
+				rotate += err
 			
-			# Add error
-			err = err * err_discount + (1- err_discount) * ((random.random() - 0.5) / 10)
-			print(err)
-			print(rotate)
-			rotate += err
-	
 			# Store 
 			store_arr = np.concatenate(([rotate],line_pos))
-			action_state = np.append(action_state, np.array([store_arr]), 0)	
-	
+			action_state = np.append(action_state, np.array([store_arr]), 0)
+		
 			# Action 
 			car.move(0.2, rotate)
 			
@@ -413,5 +283,21 @@ for j in range(1000):
 			
 			print(e)		
 			running = False
+	
+	if running == False : break
 			
-	cv2.destroyWindow(frame_name)		
+cv2.destroyWindow(frame_name)			
+
+	
+# Separate storing actions and state
+# Explore discount rate of reward
+# Explore penaly of None
+# Move RI related code to class
+# Set error as ratio of action variance
+
+# Add key to kill whole process >> Done
+# Keep frame alive >> Done
+# Create model only once >> Done
+# Speed up running process >> Done
+			
+	
