@@ -1,0 +1,18 @@
+Exercise 2.1: Pr(random_action) * Pr(best_action | random_action) + Pr(greedy_action) = 
+              0.5               * 0.5                             + (1 - 0.5)         =
+              0.25 + 0.5 = 0.75
+
+Exercise 2.2: 
+
+epsilon did occur: 2, 5
+epsilon could have occured: 1, 3, 4
+
+Exercise 2.3
+Case epsilon = 0: Pr(best_action) = Pr(first_action > 0) = 1 / 5 = 0.2
+Case epsilon = 0.01: Pr(greedy_action) + Pr(random_action) * Pr(best_action | random_action) = 0.99 + 0.01 * 0.1 = 0.991 << Best in the long run
+Case epsilon = 0.1: Pr(greedy_action) + Pr(random_action) * Pr(best_action | random_action) = 0.9 + 0.1 * 0.1 = 0.91
+
+Exercise 2.4: Add subscript n to alpha? 
+
+Exercise 2.6: Using optimistic initial value, the algorithm first tries all option, which causes more variance as actions are chosen at random, rather than established performance. 
+

@@ -1,0 +1,12 @@
+Exercise 1.1: I think it would find new strategies to win and then find strategies to defeat those strategy, so learning would occur. The system would probably learn more than when playing a random openent. Thought system might get less experience in exploiting an opponents weakness/mistakes.
+
+Exercise 1.2: Taking advantace of symmetry will reduces the state-action space and allows the system to learn faster and require less training time. 
+
+If the system did not make use of symmetry the learned values would not necessarily be the same as learned values are dependent on factors such as, number of time a state was experiences, the randomness of the action taken from that state. 
+
+Exercise 1.3: If a player always performed the greedy action, the player would not learn and performace would not improve. Overtime it would likely perform worse than a noncreedy player. 
+
+Exercise 1.4: If the step size parameter is reduced than the agent will learn less from exploratory moves. Especially for non stationary problem it is important to continually keep learning.
+
+Exercise 1.5: Build a model of the simulation? 
+
