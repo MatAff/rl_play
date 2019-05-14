@@ -127,10 +127,22 @@ class Car(object):
 			sub_line = Line(points[i,:], points[i+1,:])
 			inters, has_intersect, overlap = detect_line.intersect(sub_line)			
 			if overlap == True: 	
-				return(np.linalg.norm(inters - sp) / np.linalg.norm(ep - sp))
+				pos = np.linalg.norm(inters - sp) / np.linalg.norm(ep - sp)
+				return((pos - 0.5) * 2.0)
 	
 	def detect_list(self, points, frame, dist_list):
 		return([self.detect(points, frame, dist) for dist in dist_list])
+
+class Retainer(object):
+	
+	def __init__(self, data):
+		self.prev = data
+		
+	def retain(self, current):
+		current = current.astype('float')
+		current[np.isnan(current)] = self.prev[np.isnan(current)]
+		self.prev = current
+		return(current)		
 
 def create_model(shape):
 	model = keras.Sequential()
@@ -141,33 +153,18 @@ def create_model(shape):
 	print(model.summary())
 	return(model)
 
-def preprocess(X):
-	X = X.astype('float') - 0.5
-	X = np.nan_to_num(X)
-	return(X)
-
-def assign_reward(action_state, discount):
-	
-	# Process position
-	position = action_state[:,1]
-	position = position.astype('float') - 0.5
-	position[np.isnan(position)] = 2.0
-	position = np.absolute(position)
-	
-	# Calculate reward
+def assign_reward(rewards, discount):
 	running_reward = 0.0
-	rewards = np.array([], 'float')
-	for i in reversed(range(position.shape[0])):
-		rewards = np.concatenate(([running_reward], rewards))
-		running_reward = running_reward * discount + position[i] * (1 - discount)
-	
-	return(rewards)
+	discounted_rewards = np.array([], 'float')
+	for i in reversed(range(rewards.shape[0])):
+		discounted_rewards = np.concatenate(([running_reward], discounted_rewards))
+		running_reward = running_reward * discount + rewards[i] * (1 - discount)	
+	return(discounted_rewards)
 
 def select_data(action_state, rewards):
 
 	# Preprocess data
 	X = action_state[:,1:]	
-	X = preprocess(X)
 	y = rewards
 	
 	# Create and fit model
@@ -182,32 +179,96 @@ def select_data(action_state, rewards):
 	sub_action_state = action_state[rewards < expected_rewards[:,0],:]
 	
 	return(sub_action_state)
-	
-# Instantiate course and car		
-course = Course()
-car = Car()
-dist_list = [0.5, 1.0, 1.5, 2.0, 2.5]
 
-# Create window
+class Control(object):
+	
+	def __init__(self):
+		self.phase = 0
+		self.ret = Retainer(np.zeros(len(dist_list)))	
+		
+		# Create place to store action state
+		self.action_state = np.empty((0,len(dist_list) + 1))
+		self.rewards = np.empty((0,1))
+
+	def pos_to_reward(self, line_pos):
+		pos = np.array(line_pos).astype('float')
+		pos[np.isnan(pos)] = 3.0
+		return np.abs(pos)[0]
+				
+	def decide(self, line_pos):
+		
+		# Update reward list
+		self.rewards = np.append(self.rewards, self.pos_to_reward(line_pos)) 
+		
+		# Insert retained values
+		line_pos = self.ret.retain(np.array(line_pos)) 
+				
+		if self.phase == 0:
+			if line_pos[1] is not None: 
+				rotate = line_pos[1] * 0.1
+		else:
+			rotate = self.model.predict(np.array([line_pos]))[0,0]				
+			self.err = self.err * self.err_discount + (1 - self.err_discount) * ((random.random() - 0.5) / 10.0)
+			rotate += self.err
+		
+		# Store
+		store_arr = np.concatenate(([rotate],line_pos))
+		self.action_state = np.append(self.action_state, np.array([store_arr]), 0)
+							
+		return(rotate)
+	
+	def next(self): # Rename this! Poor name choice!
+		self.phase = min(self.phase + 1, 2)
+
+		self.err = 0.0
+		self.err_discount = 0.9
+
+		
+		if self.phase ==1:
+			
+			# Randomness # Should move to controller
+			
+			X = self.action_state[:,1:]
+			y = self.action_state[:,0]
+			
+			# Create model
+			self.model = create_model(X.shape)
+
+			# Fit model
+			self.model.fit(X, y, epochs=50, batch_size=256, verbose=0)
+		
+		if self.phase > 1:
+			# Select data		
+			values = assign_reward(self.rewards, 0.75)
+			sub_action_state = select_data(self.action_state, values)
+
+			# Preprocess data	
+			X = sub_action_state[:,1:]
+			y = sub_action_state[:,0]					
+				
+			# Fit model
+			self.model.fit(X, y, epochs=50, batch_size=256, verbose=0)
+
+####################
+### MAIN SECTION ###
+####################
+	
+# Display settings
 frame_name = 'Sim'
 cv2.namedWindow(frame_name)		
-
-# Frame settings
 height = 480
 width = 640
 scale = 35
 
-# Store measurement and action
-action_state = np.empty((0,len(dist_list) + 1))
-
-# Set number runs
+# Run settings
 nr_runs = 100
-frames_per_run = 1000
+frames_per_run = 400
 running = True
 
-# Randomness
-err = (random.random() - 0.5) /10
-err_discount = 0.9
+# Instantiate sim and control elements
+course = Course()
+dist_list = [0.5, 1.0, 1.5, 2.0, 2.5]
+control = Control()		
 
 # Loop through runs
 for run in range(nr_runs):
@@ -215,74 +276,40 @@ for run in range(nr_runs):
 	# Reset
 	print(run)
 	car = Car()	
-
-	# Create model after first run
-	if run > 0:
-		
-		if run == 1:
-			X = action_state[:,1:]
-			y = action_state[:,0]
-			
-			# Create model
-			model = create_model(X.shape)
-				
-		else:			
-			# Select data		
-			rewards = assign_reward(action_state, 0.9)
-			sub_action_state = select_data(action_state, rewards)
-
-			# Preprocess data	
-			X = sub_action_state[:,1:]
-			y = sub_action_state[:,0]					
-		
-		# Preprocess data
-		X = preprocess(X)
-		
-		# Fit model
-		model.fit(X, y, epochs=50, batch_size=256, verbose=0)
-		
+	
 	# Main loop
 	for frame_nr in range(frames_per_run):
 		
 		try:
 		
-			# Simulation
+			# Plot course and car
 			frame = np.zeros((height, width,3), np.uint8)	
 			course.draw(frame)
 			car.draw(frame)
+			
+			# Detect and plot detect
 			line_pos = car.detect_list(course.points, frame, dist_list)
 			
-			# Show and get key
-			if run > 50 : 
-				cv2.imshow(frame_name, frame)
-				key = cv2.waitKey(5)
-		
+			# Show 
+			cv2.imshow(frame_name, frame)
+			key = cv2.waitKey(5)
+			
 			# Process key
-			if key == ESC_KEY :	
-				running = False
-				break
+			if key == ESC_KEY : raise ValueError('ESC pressed')	
 				
 			# Decide
-			if run == 0:
-				if line_pos[1] is not None: 
-					rotate = (line_pos[1] - 0.5) * 0.2
-			else:			
-				x = preprocess(np.array([line_pos]))
-				rotate = model.predict(x)[0,0]				
-				err = err * err_discount + (1- err_discount) * ((random.random() - 0.5) / 10)
-				rotate += err
+			rotate = control.decide(line_pos)
 			
-			# Store 
-			store_arr = np.concatenate(([rotate],line_pos))
-			action_state = np.append(action_state, np.array([store_arr]), 0)
-		
-			# Action 
+			# Act
 			car.move(0.2, rotate)
 			
 		except Exception as e: 
 			
 			print(e)		
 			running = False
+			break
+
+	control.next()
 	
 	if running == False : break
 			
@@ -292,12 +319,13 @@ cv2.destroyWindow(frame_name)
 # Separate storing actions and state
 # Explore discount rate of reward
 # Explore penaly of None
-# Move RI related code to class
 # Set error as ratio of action variance
 
 # Add key to kill whole process >> Done
 # Keep frame alive >> Done
 # Create model only once >> Done
 # Speed up running process >> Done
+# Retain previous position when None >> Done
+# Move RI related code to class >> Done
 			
 	
