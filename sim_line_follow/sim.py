@@ -144,16 +144,7 @@ class Retainer(object):
 		self.prev = current
 		return(current)		
 
-def create_model(shape):
-	model = keras.Sequential()
-	model.add(keras.layers.Dense(10, activation='relu', input_shape=(shape[1],)))
-	model.add(keras.layers.Dense(10, activation='relu'))
-	model.add(keras.layers.Dense(1))
-	model.compile(optimizer='rmsprop', loss='mse')
-	print(model.summary())
-	return(model)
-
-def assign_reward(rewards, discount):
+def discount_reward(rewards, discount):
 	running_reward = 0.0
 	discounted_rewards = np.array([], 'float')
 	for i in reversed(range(rewards.shape[0])):
@@ -161,35 +152,83 @@ def assign_reward(rewards, discount):
 		running_reward = running_reward * discount + rewards[i] * (1 - discount)	
 	return(discounted_rewards)
 
-def select_data(action_state, rewards):
+def create_model(shape):
+	model = keras.Sequential()
+	model.add(keras.layers.Dense(10, activation='relu', input_shape=(shape[1],)))
+	model.add(keras.layers.Dense(10, activation='relu'))
+	model.add(keras.layers.Dense(1))
+	model.compile(optimizer='rmsprop', loss='mse')
+	return(model)
 
-	# Preprocess data
-	X = action_state[:,1:]	
-	y = rewards
-	
+def select_data(states, actions, rewards):
+
 	# Create and fit model
-	model = create_model(X.shape)
-	model.fit(X, y, epochs=50, batch_size=256, verbose=0) 
+	model = create_model(states.shape)
+	model.fit(states, rewards, epochs=10, batch_size=256, verbose=0) 
 
     # Predict expected rewards
-	expected_rewards = model.predict(X)
+	expected_rewards = model.predict(states)
 	plt.scatter(rewards, expected_rewards)
 		
 	# Select better than expected performing data
-	sub_action_state = action_state[rewards < expected_rewards[:,0],:]
+	good_cases = (rewards < expected_rewards)[:,0]
 	
-	return(sub_action_state)
+	return(states[good_cases,:], actions[good_cases])
 
 class Control(object):
 	
 	def __init__(self):
 		self.phase = 0
+		
+		# Set up store space
+		self.all_states = np.empty((0,len(dist_list)))
+		self.all_actions = np.empty((0,1))
+		self.all_rewards = np.empty((0,1))	
+
+		self.mean_reward_list = np.empty((0,1))			
+				
+	def pre(self, run_nr): # Fix use of dist_list (need to know about state/action dim)
+		
+		# Set up run store space
+		self.states = np.empty((0,len(dist_list)))
+		self.actions = np.empty((0,1))
+		self.rewards = np.empty((0,1))
+		
+		# (Re)set retrainer
 		self.ret = Retainer(np.zeros(len(dist_list)))	
 		
-		# Create place to store action state
-		self.action_state = np.empty((0,len(dist_list) + 1))
-		self.rewards = np.empty((0,1))
-
+		# (Re)set error		
+		self.err = 0.0
+		self.err_discount = 0.9
+		
+		if run_nr == 1:
+			self.model = create_model(self.all_states.shape)
+			self.model.fit(self.all_states, self.all_actions, epochs=50, batch_size=256, verbose=0)
+		
+		if run_nr > 1:					
+			sub_states, sub_actions = select_data(self.all_states, self.all_actions, self.all_rewards)
+			self.model.fit(sub_states, sub_actions, epochs=50, batch_size=256, verbose=0)
+   
+	def post(self, run_nr): 
+		
+		# Update phase
+		self.phase = min(self.phase + 1, 2)
+		
+		# Print result
+		mean_reward = np.mean(self.rewards)
+		print('Mean reward (less is better): ')
+		print(mean_reward)
+		self.mean_reward_list = np.append(self.mean_reward_list, mean_reward)
+		
+		# Update discounted reward
+		discounted_rewards = discount_reward(self.rewards, 0.9)
+		
+		# Add data to store
+		self.all_rewards = np.append(self.all_rewards, discounted_rewards[1:])
+		self.all_states = np.append(self.all_states, self.states[0:-1,:], 0)
+		self.all_actions = np.append(self.all_actions, self.actions[0:-1])
+		
+		
 	def pos_to_reward(self, line_pos):
 		pos = np.array(line_pos).astype('float')
 		pos[np.isnan(pos)] = 3.0
@@ -212,43 +251,11 @@ class Control(object):
 			rotate += self.err
 		
 		# Store
-		store_arr = np.concatenate(([rotate],line_pos))
-		self.action_state = np.append(self.action_state, np.array([store_arr]), 0)
+		self.states = np.append(self.states, np.array([line_pos]), 0)
+		self.actions = np.append(self.actions, rotate)
 							
 		return(rotate)
 	
-	def next(self): # Rename this! Poor name choice!
-		self.phase = min(self.phase + 1, 2)
-
-		self.err = 0.0
-		self.err_discount = 0.9
-
-		
-		if self.phase ==1:
-			
-			# Randomness # Should move to controller
-			
-			X = self.action_state[:,1:]
-			y = self.action_state[:,0]
-			
-			# Create model
-			self.model = create_model(X.shape)
-
-			# Fit model
-			self.model.fit(X, y, epochs=50, batch_size=256, verbose=0)
-		
-		if self.phase > 1:
-			# Select data		
-			values = assign_reward(self.rewards, 0.75)
-			sub_action_state = select_data(self.action_state, values)
-
-			# Preprocess data	
-			X = sub_action_state[:,1:]
-			y = sub_action_state[:,0]					
-				
-			# Fit model
-			self.model.fit(X, y, epochs=50, batch_size=256, verbose=0)
-
 ####################
 ### MAIN SECTION ###
 ####################
@@ -276,6 +283,9 @@ for run in range(nr_runs):
 	# Reset
 	print(run)
 	car = Car()	
+	
+	# Control
+	control.pre(run)
 	
 	# Main loop
 	for frame_nr in range(frames_per_run):
@@ -309,13 +319,15 @@ for run in range(nr_runs):
 			running = False
 			break
 
-	control.next()
+    # Control
+	control.post(run)
 	
 	if running == False : break
 			
 cv2.destroyWindow(frame_name)			
 
-	
+plt.plot(control.mean_reward_list)	
+
 # Separate storing actions and state
 # Explore discount rate of reward
 # Explore penaly of None
