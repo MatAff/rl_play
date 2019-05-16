@@ -178,29 +178,42 @@ def select_data(states, actions, rewards):
 	print(states[good_cases,:])
 	return(states[good_cases,:], actions[good_cases])
 
-class Control(object):
+class ControlBase(object):
 	
-	def __init__(self):
-		self.phase = 0
-		
-		# Set up store space
-		self.all_states = np.empty((0,len(dist_list)))
-		self.all_actions = np.empty((0,1))
-		self.all_rewards = np.empty((0,1))	
+	def __init__(self, state_space):
+		self.state_space = state_space
+		self.all_states = np.empty((0, state_space))
+		self.all_actions = np.empty((0, 1))
+		self.all_rewards = np.empty((0, 1))	
 
-		self.mean_reward_list = np.empty((0,1))			
-				
-	def pre(self, run_nr): # Fix use of dist_list (need to know about state/action dim)
-		
-		# Set up run store space
-		self.states = np.empty((0,len(dist_list)))
+	def pre(self):
+		self.states = np.empty((0,self.state_space))
 		self.actions = np.empty((0,1))
 		self.rewards = np.empty((0,1))
 		
-		# (Re)set retrainer
+	def post(self):
+		self.all_states = np.append(self.all_states, self.states[0:-1,:], 0)
+		self.all_actions = np.append(self.all_actions, self.actions[0:-1])
+		self.all_rewards = np.append(self.all_rewards, self.rewards[1:])		
+
+class Control(ControlBase):
+	
+	def __init__(self, state_space):
+		super(Control, self).__init__(state_space)
+		self.phase = 0
+		self.all_discounted_rewards = np.empty((0,1))
+		self.mean_rewards = np.empty((0,1))
+		self.mean_reward_list = np.empty((0,1))			
+				
+	def pre(self, run_nr): 
+
+		# Run super
+		super(Control, self).pre()
+				
+		# Set retrainer
 		self.ret = Retainer(np.zeros(len(dist_list)))	
 		
-		# (Re)set error		
+		# Set error		
 		self.err = 0.0
 		self.err_discount = 0.9
 		
@@ -215,24 +228,22 @@ class Control(object):
    
 	def post(self, run_nr): 
 		
+		# Run super
+		super(Control, self).post()
+		
 		# Update phase
 		self.phase = min(self.phase + 1, 2)
 		
-		# Print result
+		# Mean reward
 		mean_reward = np.mean(self.rewards)
-		print('Mean reward (less is better): ')
-		print(mean_reward)
+		print('Mean reward (less is better): %.2f' % mean_reward)
 		self.mean_reward_list = np.append(self.mean_reward_list, mean_reward)
+		self.mean_rewards = np.append(self.mean_rewards, np.repeat(mean_reward, len(self.rewards) - 1))
 		
-		# Update discounted reward
+		# Discounted reward
 		discounted_rewards = discount_reward(self.rewards, 0.9)
-		
-		# Add data to store
-		self.all_rewards = np.append(self.all_rewards, discounted_rewards[1:])
-		self.all_states = np.append(self.all_states, self.states[0:-1,:], 0)
-		self.all_actions = np.append(self.all_actions, self.actions[0:-1])
-		
-		
+		self.all_discounted_rewards = np.append(self.all_discounted_rewards, discounted_rewards)
+				
 	def pos_to_reward(self, line_pos):
 		pos = np.array(line_pos).astype('float')
 		pos[np.isnan(pos)] = 10.0
@@ -280,7 +291,7 @@ running = True
 # Instantiate sim and control elements
 course = Course()
 dist_list = [0.5, 1.0, 1.5, 2.0, 2.5]
-control = Control()		
+control = Control(len(dist_list))		
 
 # Loop through runs
 for run in range(nr_runs):
@@ -333,9 +344,6 @@ cv2.destroyWindow(frame_name)
 
 plt.plot(control.mean_reward_list)	
 
-# Separate storing actions and state
-# Explore discount rate of reward
-# Explore penaly of None
 # Set error as ratio of action variance
 
 # Add key to kill whole process >> Done
@@ -344,5 +352,9 @@ plt.plot(control.mean_reward_list)
 # Speed up running process >> Done
 # Retain previous position when None >> Done
 # Move RI related code to class >> Done
+# Separate storing actions and state >> Done
+# Explore discount rate of reward >> Done
+# Explore penaly of None >> Done
+
 			
 	
