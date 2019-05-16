@@ -56,7 +56,17 @@ class Spline(object):
 	def rel_line(self, S, E, ratio):
 		return(S + (E - S) * ratio)
 
-# Course class
+class Recorder(object):
+	
+	def __init__(self, filename, fps, size):
+		self.out = cv2.VideoWriter(filename, cv2.VideoWriter_fourcc(*'DIVX'), fps, size)
+	
+	def write(self, frame):
+		self.out.write(frame)
+		
+	def release(self):
+		self.out.release()
+
 class Course(object):
 	
 	def __init__(self):		
@@ -78,7 +88,7 @@ class Course(object):
 # Function to convert cartesian coordinate into pixel coordinates
 def to_pixel(cart):	 
 	S = np.array([scale, -scale])
-	T = np.array([320, 480 - 40])
+	T = np.array([320, 480 - 80])
 	return(tuple((cart * S + T).astype(int)))
 
 def draw_line(frame, points, color):
@@ -161,6 +171,20 @@ def create_model(shape):
 	model.compile(optimizer='rmsprop', loss='mse')
 	return(model)
 
+def select_reverse(states, actions, rewards):
+
+	# Create and fit model
+	model = create_model(states.shape)
+	model.fit(states, rewards, epochs=10, batch_size=256, verbose=0) 
+
+    # Predict expected rewards
+	expected_rewards = model.predict(states)
+	plt.scatter(rewards, expected_rewards)
+		
+	# Select better than expected performing data
+	good_cases = (rewards > expected_rewards)[:,0]
+	return(states[good_cases,:], actions[good_cases])	
+
 def select_data(states, actions, rewards):
 
 	# Create and fit model
@@ -173,10 +197,11 @@ def select_data(states, actions, rewards):
 		
 	# Select better than expected performing data
 	good_cases = (rewards < expected_rewards)[:,0]
-	print(good_cases.shape)
-	print(good_cases)
-	print(states[good_cases,:])
 	return(states[good_cases,:], actions[good_cases])
+	
+def select_by_episode(states, actions, mean_rewards):
+	med = np.median(mean_rewards)
+	return(states[mean_rewards < med,:], actions[mean_rewards < med])
 
 class ControlBase(object):
 	
@@ -202,7 +227,7 @@ class Control(ControlBase):
 		super(Control, self).__init__(state_space)
 		self.phase = 0
 		self.all_discounted_rewards = np.empty((0,1))
-		self.mean_rewards = np.empty((0,1))
+		self.all_mean_rewards = np.empty((0,1))
 		self.mean_reward_list = np.empty((0,1))			
 				
 	def pre(self, run_nr): 
@@ -219,12 +244,14 @@ class Control(ControlBase):
 		
 		if run_nr == 1:
 			self.model = create_model(self.all_states.shape)
-			self.model.fit(self.all_states, self.all_actions, epochs=50, batch_size=256, verbose=0)
-		
+			self.model.fit(self.all_states, self.all_actions, epochs=25, batch_size=256, verbose=0)
 		if run_nr > 1:					
 			self.model = create_model(self.all_states.shape)
-			sub_states, sub_actions = select_data(self.all_states, self.all_actions, self.all_rewards)
-			self.model.fit(sub_states, sub_actions, epochs=50, batch_size=256, verbose=0)
+			#sub_states, sub_actions = select_data(self.all_states, self.all_actions, self.all_rewards)
+			#sub_states, sub_actions = select_reverse(self.all_states, self.all_actions, self.all_rewards)
+			sub_states, sub_actions = select_by_episode(self.all_states, self.all_actions, self.all_mean_rewards)
+			#sub_states, sub_actions = select_by_episode(self.all_states, self.all_actions, self.all_rewards)  
+			self.model.fit(sub_states, sub_actions, epochs=25, batch_size=256, verbose=0)
    
 	def post(self, run_nr): 
 		
@@ -237,8 +264,8 @@ class Control(ControlBase):
 		# Mean reward
 		mean_reward = np.mean(self.rewards)
 		print('Mean reward (less is better): %.2f' % mean_reward)
+		self.all_mean_rewards = np.append(self.all_mean_rewards, np.repeat(mean_reward, len(self.rewards) - 1))
 		self.mean_reward_list = np.append(self.mean_reward_list, mean_reward)
-		self.mean_rewards = np.append(self.mean_rewards, np.repeat(mean_reward, len(self.rewards) - 1))
 		
 		# Discounted reward
 		discounted_rewards = discount_reward(self.rewards, 0.9)
@@ -271,7 +298,9 @@ class Control(ControlBase):
 		self.actions = np.append(self.actions, rotate)
 							
 		return(rotate)
-	
+		
+
+		
 ####################
 ### MAIN SECTION ###
 ####################
@@ -303,6 +332,10 @@ for run in range(nr_runs):
 	# Control
 	control.pre(run)
 	
+	# Recored
+	filename = './run_%03i.avi' % run 
+	rec = Recorder(filename, 30, (width, height))
+	
 	# Main loop
 	for frame_nr in range(frames_per_run):
 		
@@ -317,6 +350,7 @@ for run in range(nr_runs):
 			line_pos = car.detect_list(course.points, frame, dist_list)
 			
 			# Show 
+			rec.write(frame)
 			cv2.imshow(frame_name, frame)
 			key = cv2.waitKey(5)
 			
@@ -338,12 +372,17 @@ for run in range(nr_runs):
     # Control
 	control.post(run)
 	
+	# Recorder
+	rec.release()	
+	
 	if running == False : break
 			
-cv2.destroyWindow(frame_name)			
+cv2.destroyWindow(frame_name)	
 
 plt.plot(control.mean_reward_list)	
 
+# Add recorder
+# Save models
 # Set error as ratio of action variance
 
 # Add key to kill whole process >> Done
