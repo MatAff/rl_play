@@ -155,6 +155,7 @@ def discount_reward(rewards, discount):
 def create_model(shape):
 	model = keras.Sequential()
 	model.add(keras.layers.Dense(10, activation='relu', input_shape=(shape[1],)))
+	model.add(keras.layers.Dense(20, activation='relu'))
 	model.add(keras.layers.Dense(10, activation='relu'))
 	model.add(keras.layers.Dense(1))
 	model.compile(optimizer='rmsprop', loss='mse')
@@ -172,7 +173,9 @@ def select_data(states, actions, rewards):
 		
 	# Select better than expected performing data
 	good_cases = (rewards < expected_rewards)[:,0]
-	
+	print(good_cases.shape)
+	print(good_cases)
+	print(states[good_cases,:])
 	return(states[good_cases,:], actions[good_cases])
 
 class Control(object):
@@ -206,6 +209,7 @@ class Control(object):
 			self.model.fit(self.all_states, self.all_actions, epochs=50, batch_size=256, verbose=0)
 		
 		if run_nr > 1:					
+			self.model = create_model(self.all_states.shape)
 			sub_states, sub_actions = select_data(self.all_states, self.all_actions, self.all_rewards)
 			self.model.fit(sub_states, sub_actions, epochs=50, batch_size=256, verbose=0)
    
@@ -231,7 +235,7 @@ class Control(object):
 		
 	def pos_to_reward(self, line_pos):
 		pos = np.array(line_pos).astype('float')
-		pos[np.isnan(pos)] = 3.0
+		pos[np.isnan(pos)] = 10.0
 		return np.abs(pos)[0]
 				
 	def decide(self, line_pos):
@@ -247,8 +251,9 @@ class Control(object):
 				rotate = line_pos[1] * 0.1
 		else:
 			rotate = self.model.predict(np.array([line_pos]))[0,0]				
-			self.err = self.err * self.err_discount + (1 - self.err_discount) * ((random.random() - 0.5) / 10.0)
-			rotate += self.err
+		
+		self.err = self.err * self.err_discount + (1 - self.err_discount) * ((random.random() - 0.5) / 50.0)
+		rotate += self.err
 		
 		# Store
 		self.states = np.append(self.states, np.array([line_pos]), 0)
