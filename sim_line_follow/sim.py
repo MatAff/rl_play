@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import cv2
+import time
 import numpy as np
 import pandas as pd
 import math
@@ -11,6 +12,7 @@ import keras
 
 # Keys
 ESC_KEY = 27
+KEY_P = 112
 
 # A point should be an np.array with shape (2,)
 
@@ -64,6 +66,10 @@ class Recorder(object):
 	def write(self, frame):
 		self.out.write(frame)
 		
+	def save_img(self, frame, filename=None):
+		if filename is None : filename = str(time.time()) + '.png'
+		cv2.imwrite(filename, frame)
+		
 	def release(self):
 		self.out.release()
 
@@ -95,7 +101,12 @@ def draw_line(frame, points, color):
 	for i in range(points.shape[0] - 1):		
 		s_pix = to_pixel(points[i+0,:])
 		e_pix = to_pixel(points[i+1,:])
-		cv2.line(frame, s_pix, e_pix,color,2)		
+		try:
+			cv2.line(frame, s_pix, e_pix,color,2)		
+		except Exception as e:
+			print(points)
+			print(s_pix, e_pix)
+			raise e
 	
 def rotation(rad):
 	return(np.matrix([[math.cos(rad), -math.sin(rad)],
@@ -163,10 +174,11 @@ def discount_reward(rewards, discount):
 	return(discounted_rewards)
 
 def create_model(shape):
+	activation = 'relu'
 	model = keras.Sequential()
-	model.add(keras.layers.Dense(10, activation='relu', input_shape=(shape[1],)))
-	model.add(keras.layers.Dense(20, activation='relu'))
-	model.add(keras.layers.Dense(10, activation='relu'))
+	model.add(keras.layers.Dense(10, activation=activation, input_shape=(shape[1],)))
+	model.add(keras.layers.Dense(20, activation=activation))
+	model.add(keras.layers.Dense(20, activation=activation))
 	model.add(keras.layers.Dense(1))
 	model.compile(optimizer='rmsprop', loss='mse')
 	return(model)
@@ -180,6 +192,7 @@ def select_reverse(states, actions, rewards):
     # Predict expected rewards
 	expected_rewards = model.predict(states)
 	plt.scatter(rewards, expected_rewards)
+	plt.show()
 		
 	# Select better than expected performing data
 	good_cases = (rewards > expected_rewards)[:,0]
@@ -187,22 +200,32 @@ def select_reverse(states, actions, rewards):
 
 def select_data(states, actions, rewards):
 
+	if states.shape[0] != actions.shape[0] or states.shape[0] != rewards.shape[0] : raise ValueError('Shapes do not align')
+	
 	# Create and fit model
 	model = create_model(states.shape)
-	model.fit(states, rewards, epochs=10, batch_size=256, verbose=0) 
+	model.fit(states, rewards, epochs=20, batch_size=256, verbose=0) 
 
     # Predict expected rewards
 	expected_rewards = model.predict(states)
-	plt.scatter(rewards, expected_rewards)
-		
-	# Select better than expected performing data
-	good_cases = (rewards < expected_rewards)[:,0]
-	return(states[good_cases,:], actions[good_cases])
+	expected_rewards = np.squeeze(expected_rewards)
+	good_cases = (rewards < 0.75 * expected_rewards)
+	print(np.unique(good_cases, return_counts=True))
 	
+	# Plot
+	plt.scatter(expected_rewards, rewards, c=good_cases)
+	plt.plot([0, 3], [0, 3])
+	plt.xlabel('expected rewards')
+	plt.ylabel('rewards')
+	plt.show()
+			
+	return(states[good_cases,:], actions[good_cases])
+
 def select_by_episode(states, actions, mean_rewards):
 	med = np.median(mean_rewards)
 	return(states[mean_rewards < med,:], actions[mean_rewards < med])
 
+# Generic RI control class not specific to task at hand
 class ControlBase(object):
 	
 	def __init__(self, state_space):
@@ -217,49 +240,30 @@ class ControlBase(object):
 		self.rewards = np.empty((0,1))
 		
 	def post(self):
-		self.all_states = np.append(self.all_states, self.states[0:-1,:], 0)
-		self.all_actions = np.append(self.all_actions, self.actions[0:-1])
-		self.all_rewards = np.append(self.all_rewards, self.rewards[1:])		
+		self.shift = 1
+		self.all_states = np.append(self.all_states, self.states[0:-self.shift,:], 0)
+		self.all_actions = np.append(self.all_actions, self.actions[0:-self.shift])
+		self.all_rewards = np.append(self.all_rewards, self.rewards[self.shift:])		
 
-class Control(ControlBase):
+# RI Control class dedicated to task
+class ControlLineFollow(ControlBase):
 	
 	def __init__(self, state_space):
-		super(Control, self).__init__(state_space)
+		super(ControlLineFollow, self).__init__(state_space)
 		self.phase = 0
 		self.all_discounted_rewards = np.empty((0,1))
 		self.all_mean_rewards = np.empty((0,1))
 		self.mean_reward_list = np.empty((0,1))			
 				
-	def pre(self, run_nr): 
-
-		# Run super
-		super(Control, self).pre()
-				
-		# Set retrainer
-		self.ret = Retainer(np.zeros(len(dist_list)))	
-		
-		# Set error		
-		self.err = 0.0
+	def pre(self, run_nr): 		
+		super(ControlLineFollow, self).pre() # Run super					
+		self.ret = Retainer(np.zeros(len(dist_list)))		# Set retrainer
+		self.err = 0.0 # Set error		
 		self.err_discount = 0.9
-		
-		if run_nr == 1:
-			self.model = create_model(self.all_states.shape)
-			self.model.fit(self.all_states, self.all_actions, epochs=25, batch_size=256, verbose=0)
-		if run_nr > 1:					
-			self.model = create_model(self.all_states.shape)
-			#sub_states, sub_actions = select_data(self.all_states, self.all_actions, self.all_rewards)
-			#sub_states, sub_actions = select_reverse(self.all_states, self.all_actions, self.all_rewards)
-			sub_states, sub_actions = select_by_episode(self.all_states, self.all_actions, self.all_mean_rewards)
-			#sub_states, sub_actions = select_by_episode(self.all_states, self.all_actions, self.all_rewards)  
-			self.model.fit(sub_states, sub_actions, epochs=25, batch_size=256, verbose=0)
-   
-	def post(self, run_nr): 
-		
-		# Run super
-		super(Control, self).post()
-		
-		# Update phase
-		self.phase = min(self.phase + 1, 2)
+				
+	def post(self, run_nr): 		
+		super(ControlLineFollow, self).post()  # Run super
+		self.phase = min(self.phase + 1, 2) # Update phase
 		
 		# Mean reward
 		mean_reward = np.mean(self.rewards)
@@ -269,37 +273,90 @@ class Control(ControlBase):
 		
 		# Discounted reward
 		discounted_rewards = discount_reward(self.rewards, 0.9)
-		self.all_discounted_rewards = np.append(self.all_discounted_rewards, discounted_rewards)
+		self.all_discounted_rewards = np.append(self.all_discounted_rewards, discounted_rewards[self.shift:])
 				
 	def pos_to_reward(self, line_pos):
 		pos = np.array(line_pos).astype('float')
-		pos[np.isnan(pos)] = 10.0
+		pos[np.isnan(pos)] = 5.0
 		return np.abs(pos)[0]
 				
 	def decide(self, line_pos):
-		
-		# Update reward list
-		self.rewards = np.append(self.rewards, self.pos_to_reward(line_pos)) 
-		
-		# Insert retained values
-		line_pos = self.ret.retain(np.array(line_pos)) 
-				
-		if self.phase == 0:
-			if line_pos[1] is not None: 
-				rotate = line_pos[1] * 0.1
-		else:
-			rotate = self.model.predict(np.array([line_pos]))[0,0]				
-		
-		self.err = self.err * self.err_discount + (1 - self.err_discount) * ((random.random() - 0.5) / 50.0)
-		rotate += self.err
-		
-		# Store
-		self.states = np.append(self.states, np.array([line_pos]), 0)
-		self.actions = np.append(self.actions, rotate)
-							
-		return(rotate)
-		
+		self.rewards = np.append(self.rewards, self.pos_to_reward(line_pos))  # Update reward list
+		self.line_pos = self.ret.retain(np.array(line_pos)) # Insert retained values
+		self.err = self.err * self.err_discount + (1 - self.err_discount) * ((random.random() - 0.5) / 30.0) # Update error
+		self.states = np.append(self.states, np.array([self.line_pos]), 0) # Store
 
+# RI control class based on subsetting learning data
+class ControlSubData(ControlLineFollow):
+	
+	def __init__(self, state_space):
+		super(ControlSubData, self).__init__(state_space)
+	
+	def pre(self, run_nr):
+		super(ControlSubData, self).pre(run_nr)
+		
+		if run_nr == 1:
+			self.model = create_model(self.all_states.shape)
+			self.model.fit(self.all_states, self.all_actions, epochs=25, batch_size=256, verbose=0)
+		if run_nr > 1:					
+			self.model = create_model(self.all_states.shape)
+			sub_states, sub_actions = select_data(self.all_states, self.all_actions, self.all_discounted_rewards)
+			#sub_states, sub_actions = select_reverse(self.all_states, self.all_actions, self.all_rewards)
+			#sub_states, sub_actions = select_by_episode(self.all_states, self.all_actions, self.all_mean_rewards)
+			#sub_states, sub_actions = select_by_episode(self.all_states, self.all_actions, self.all_rewards)  
+			self.model.fit(sub_states, sub_actions, epochs=25, batch_size=256, verbose=0)
+
+	def post(self, run_nr):
+		super(ControlSubData, self).post(run_nr)
+
+	def decide(self, line_pos):
+		super(ControlSubData, self).decide(line_pos)		
+		if self.phase == 0:
+			if self.line_pos[1] is not None: 
+				rotate = self.line_pos[1] * 0.1
+		else:
+			rotate = self.model.predict(np.array([self.line_pos]))[0,0]		
+		rotate += self.err
+		self.actions = np.append(self.actions, rotate)
+		return(rotate)
+
+# RI control class based on subsetting learning data
+class ControlStateAction(ControlLineFollow):
+	
+	def __init__(self, state_space):
+		super(ControlStateAction, self).__init__(state_space)
+	
+	def pre(self, run_nr):
+		super(ControlStateAction, self).pre(run_nr)
+		
+		if run_nr == 1:					
+			all_states_actions = np.append(self.all_states, np.array([self.all_actions]).transpose(), axis=1)
+			self.model = create_model(all_states_actions.shape)
+			self.model.fit(all_states_actions, control.all_discounted_rewards, epochs=100, batch_size=256, verbose=0)
+
+	def post(self, run_nr):
+		super(ControlStateAction, self).post(run_nr)
+
+	def decide(self, line_pos):
+		super(ControlStateAction, self).decide(line_pos)		
+		if self.phase == 0:
+			if self.line_pos[1] is not None: 
+				self.rotate = self.line_pos[1] * 0.1
+		else:
+			pos_actions = np.arange(-0.1, 0.1, 0.01)
+			val = np.empty((0,1))
+			for act in pos_actions:
+				X = np.append(line_pos, act)
+				y = control.model.predict(np.array([X]))[0]
+				val = np.append(val, y)
+			plt.plot(val)
+			best_act = pos_actions[np.argmin(val)]
+			print(best_act)
+			self.rotate = best_act
+
+		self.rotate += self.err
+		self.actions = np.append(self.actions, self.rotate)
+		return(self.rotate)
 		
 ####################
 ### MAIN SECTION ###
@@ -312,15 +369,20 @@ height = 480
 width = 640
 scale = 35
 
+# Global red
+glob_rec = Recorder('RL.avi', 30, (width, height))
+rec_run = [0,1,2,5,10,20,50]
+
 # Run settings
-nr_runs = 100
-frames_per_run = 400
+nr_runs = 1000
+frames_per_run = 500
 running = True
 
 # Instantiate sim and control elements
 course = Course()
 dist_list = [0.5, 1.0, 1.5, 2.0, 2.5]
-control = Control(len(dist_list))		
+control = ControlSubData(len(dist_list))		
+#control = ControlStateAction(len(dist_list))		
 
 # Loop through runs
 for run in range(nr_runs):
@@ -350,17 +412,21 @@ for run in range(nr_runs):
 			line_pos = car.detect_list(course.points, frame, dist_list)
 			
 			# Show 
+			frame = cv2.putText(frame, 'Run %i' % run, (10,20), cv2.FONT_HERSHEY_SIMPLEX, 0.5,(255,255,255), 1) 
 			rec.write(frame)
+			if run in rec_run : glob_rec.write(frame)
 			cv2.imshow(frame_name, frame)
 			key = cv2.waitKey(5)
+			if key != -1 : print(key)
 			
 			# Process key
 			if key == ESC_KEY : raise ValueError('ESC pressed')	
+			if key == KEY_P : rec.save_img(frame)
 				
 			# Decide
 			rotate = control.decide(line_pos)
 			
-			# Act
+			# Act			
 			car.move(0.2, rotate)
 			
 		except Exception as e: 
@@ -372,16 +438,19 @@ for run in range(nr_runs):
     # Control
 	control.post(run)
 	
+	# Plot
+	plt.plot(control.mean_reward_list)
+	plt.show()
+	
 	# Recorder
 	rec.release()	
+	glob_rec.release()
 	
 	if running == False : break
 			
 cv2.destroyWindow(frame_name)	
 
-plt.plot(control.mean_reward_list)	
 
-# Add recorder
 # Save models
 # Set error as ratio of action variance
 
@@ -394,6 +463,6 @@ plt.plot(control.mean_reward_list)
 # Separate storing actions and state >> Done
 # Explore discount rate of reward >> Done
 # Explore penaly of None >> Done
+# Add recorder >> Done
 
-			
-	
+
