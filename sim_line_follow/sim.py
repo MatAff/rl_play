@@ -281,7 +281,7 @@ class ControlLineFollow(ControlBase):
 		self.mean_reward_list = np.append(self.mean_reward_list, mean_reward)
 
 		# Discounted reward
-		discounted_rewards = discount_reward(self.rewards, 0.9)
+		discounted_rewards = discount_reward(self.rewards, 0.95)
 		self.all_discounted_rewards = np.append(self.all_discounted_rewards, discounted_rewards[self.shift:])
 
 	def pos_to_reward(self, line_pos):
@@ -310,13 +310,13 @@ class ControlSubData(ControlLineFollow):
 		if run_nr > 1:
 			self.model = create_model(self.all_states.shape)
 			self.model.save_weights('./pre_model_%03i.h5' % run_nr)
-			#sub_states, sub_actions = select_data(self.all_states, self.all_actions, self.all_discounted_rewards)
+			sub_states, sub_actions = select_data(self.all_states, self.all_actions, self.all_discounted_rewards)
 			#sub_states, sub_actions = select_reverse(self.all_states, self.all_actions, self.all_rewards)
 			#sub_states, sub_actions = select_by_episode(self.all_states, self.all_actions, self.all_mean_rewards)
 			#sub_states, sub_actions = select_by_episode(self.all_states, self.all_actions, self.all_rewards)
 			#print('sub_states shape', sub_states.shape, '; sub_actions shape', sub_actions.shape)
-			#self.model.fit(sub_states, sub_actions, epochs=25, batch_size=256, verbose=0)
-			#self.model.save_weights('./post_model_%03i.h5' % run_nr)
+			self.model.fit(sub_states, sub_actions, epochs=25, batch_size=256, verbose=0)
+			self.model.save_weights('./post_model_%03i.h5' % run_nr)
 
 	def post(self, run_nr):
 		super(ControlSubData, self).post(run_nr)
@@ -332,6 +332,7 @@ class ControlSubData(ControlLineFollow):
 		self.actions = np.append(self.actions, rotate)
 		return(rotate)
 
+
 # RI control class based on subsetting learning data
 class ControlStateAction(ControlLineFollow):
 
@@ -341,13 +342,20 @@ class ControlStateAction(ControlLineFollow):
 	def pre(self, run_nr):
 		super(ControlStateAction, self).pre(run_nr)
 
-		if run_nr == 1:
+		if run_nr > 0:
 			all_states_actions = np.append(self.all_states, np.array([self.all_actions]).transpose(), axis=1)
 			self.model = create_model(all_states_actions.shape)
-			self.model.fit(all_states_actions, control.all_discounted_rewards, epochs=100, batch_size=256, verbose=0)
+			self.model.fit(all_states_actions, control.all_discounted_rewards, epochs=50, batch_size=256, verbose=0)
 
 	def post(self, run_nr):
 		super(ControlStateAction, self).post(run_nr)
+		plt.show()
+
+	def handle_nan(self, pos, val):
+		# TODO figure out why nan occurs
+		pos = pos[np.isnan(val)==False]
+		val = val[np.isnan(val)==False]
+		return pos, val
 
 	def decide(self, line_pos):
 		super(ControlStateAction, self).decide(line_pos)
@@ -362,13 +370,20 @@ class ControlStateAction(ControlLineFollow):
 				y = control.model.predict(np.array([X]))[0]
 				val = np.append(val, y)
 			plt.plot(val)
-			best_act = pos_actions[np.argmin(val)]
-			print(best_act)
-			self.rotate = best_act
+			pos_actions, val = self.handle_nan(pos_actions, val)
+			if val.size > 0:
+				best_act = pos_actions[np.argmin(val)]
+				#print(best_act)
+				self.rotate = best_act
 
-		self.rotate += self.err
+		#self.rotate += self.err
 		self.actions = np.append(self.actions, self.rotate)
 		return(self.rotate)
+
+
+val = np.array([np.nan, np.nan, np.nan,1])
+pos = np.array([1,2,3,4])
+np.isnan(val)
 
 ####################
 ### MAIN SECTION ###
@@ -393,8 +408,8 @@ running = True
 # Instantiate sim and control elements
 course = Course()
 dist_list = [0.5, 1.0, 1.5, 2.0, 2.5]
-control = ControlSubData(len(dist_list))
-#control = ControlStateAction(len(dist_list))
+#control = ControlSubData(len(dist_list))
+control = ControlStateAction(len(dist_list))
 
 # Loop through runs
 for run in range(nr_runs):
