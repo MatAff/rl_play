@@ -309,12 +309,14 @@ class ControlSubData(ControlLineFollow):
 			self.model.fit(self.all_states, self.all_actions, epochs=25, batch_size=256, verbose=0)
 		if run_nr > 1:
 			self.model = create_model(self.all_states.shape)
+			self.model.save_weights('./pre_model_%03i.h5' % run_nr)
 			#sub_states, sub_actions = select_data(self.all_states, self.all_actions, self.all_discounted_rewards)
-			sub_states, sub_actions = select_reverse(self.all_states, self.all_actions, self.all_rewards)
+			#sub_states, sub_actions = select_reverse(self.all_states, self.all_actions, self.all_rewards)
 			#sub_states, sub_actions = select_by_episode(self.all_states, self.all_actions, self.all_mean_rewards)
 			#sub_states, sub_actions = select_by_episode(self.all_states, self.all_actions, self.all_rewards)
-			print('sub_states shape', sub_states.shape, '; sub_actions shape', sub_actions.shape)
-			self.model.fit(sub_states, sub_actions, epochs=25, batch_size=256, verbose=0)
+			#print('sub_states shape', sub_states.shape, '; sub_actions shape', sub_actions.shape)
+			#self.model.fit(sub_states, sub_actions, epochs=25, batch_size=256, verbose=0)
+			#self.model.save_weights('./post_model_%03i.h5' % run_nr)
 
 	def post(self, run_nr):
 		super(ControlSubData, self).post(run_nr)
@@ -384,7 +386,7 @@ glob_rec = Recorder('RL.avi', 30, (width, height))
 rec_run = [0,1,2,5,10,20,50]
 
 # Run settings
-nr_runs = 1000
+nr_runs = 10000
 frames_per_run = 500
 running = True
 
@@ -461,12 +463,12 @@ for run in range(nr_runs):
 cv2.destroyWindow(frame_name)
 
 
-from keras.utils import plot_model
-plot_model(control.model, to_file='model.png')
-
-for layer in control.model.layers:
-    weights = layer.get_weights()
-    print(weights)
+#from keras.utils import plot_model
+#plot_model(control.model, to_file='model.png')
+#
+#for layer in control.model.layers:
+#    weights = layer.get_weights()
+#    print(weights)
 
 # Save models
 # Set error as ratio of action variance
